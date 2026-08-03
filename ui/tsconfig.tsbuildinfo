@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/badges.tsx","./src/components/newticketmodal.tsx","./src/components/ticketdetail.tsx","./src/components/ticketqueue.tsx","./src/components/tracepanel.tsx"],"version":"5.9.3"}
