@@ -8,6 +8,7 @@ resume, and the fact that a refund only happens after a human approves.
 import pytest
 
 from app.agents.nodes import Classification
+from app.agents.prompts import active_versions
 from tests.fakes import ScriptedResponse, use_scripted_models
 
 pytestmark = pytest.mark.db
@@ -262,7 +263,9 @@ class TestTraceAndStats:
         for expected in ("classify", "retrieve_policy", "check_eligibility", "draft_response"):
             assert expected in nodes
         assert float(trace["total_cost_usd"]) > 0
-        assert trace["prompt_versions"]["draft"] == "v1"
+        # Assert against the pinned version rather than a literal, so a
+        # deliberate prompt bump doesn't fail a test about trace plumbing.
+        assert trace["prompt_versions"]["draft"] == active_versions()["draft"]
 
     async def test_trace_is_404_before_any_run(self, client):
         ticket = await create_ticket(client)

@@ -14,7 +14,10 @@ PROMPT_DIR = Path(__file__).parent
 # Bump deliberately; the old file stays in the repo for comparison.
 PROMPT_VERSIONS: dict[str, str] = {
     "classify": "v1",
-    "draft": "v1",
+    # v2 orders the reply before the tool call. Under v1 the model ended its
+    # turn on the tool_use block and returned no text, so every ticket tripped
+    # the empty_draft output guardrail and escalated.
+    "draft": "v2",
     "revise": "v1",
 }
 
