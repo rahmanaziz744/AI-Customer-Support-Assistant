@@ -52,12 +52,50 @@ class Settings(BaseSettings):
     log_format: str = "console"
 
     # -- API ---------------------------------------------------------------
-    rate_limit_tickets: str = "20/minute"
+    # Multiple windows, semicolon-separated, are enforced together: the minute
+    # window stops bursts, the day window stops a slow drip that would still
+    # drain the model budget overnight.
+    rate_limit_tickets: str = "20/minute;300/hour;1000/day"
+    # Applied to the routes that trigger model work on an existing ticket
+    # (synchronous processing and approval), which are more expensive per call
+    # than submission.
+    rate_limit_expensive: str = "10/minute;100/hour;400/day"
+    # Fallback for every route without its own limit. Generous by design — it
+    # exists to stop a read endpoint being hammered, not to shape normal use.
+    # Empty disables it.
+    rate_limit_default: str = "240/minute"
+    # How many proxies sit in front of this process and append to
+    # `X-Forwarded-For`. 0 when exposed directly, 2 behind the deployed
+    # Caddy -> nginx chain. See app.core.rate_limit.client_ip.
+    trusted_proxy_hops: int = 0
     cors_origins: str = "http://localhost:5173"
     # The agent reaches the order system over HTTP even though it is mounted in
     # this same app, so swapping in a real commerce backend is a config change.
     order_api_base_url: str = "http://localhost:8000"
     order_api_timeout_seconds: float = 10.0
+
+    # -- Cost controls -----------------------------------------------------
+    # Rolling 24h ceiling on model spend, in USD. 0 disables enforcement, which
+    # is the default so local dev and the test suite are unaffected; a public
+    # deployment must set it. See app.core.budget.
+    daily_budget_usd: float = 0.0
+    # Fraction of the ceiling that counts as "warn" — surfaced on the budget
+    # snapshot log line so a CloudWatch alarm can fire before work is refused.
+    budget_warn_ratio: float = 0.6
+    # How long a spend reading is reused before re-querying. Trades a little
+    # overshoot past the ceiling for not running an aggregate per request.
+    budget_cache_seconds: float = 15.0
+    # Interval between `budget_snapshot` log lines. 0 disables the loop.
+    budget_snapshot_seconds: float = 60.0
+    # Ceiling on agent runs executing at once. Submission is cheap and returns
+    # immediately, so without this a burst of accepted tickets becomes a burst
+    # of concurrent graph runs.
+    max_concurrent_runs: int = 2
+
+    # -- Demo protection ---------------------------------------------------
+    # Shared secret for the destructive routes on a public demo. Empty (the
+    # default) leaves them open, which is what local dev and tests want.
+    demo_admin_token: SecretStr = SecretStr("")
 
     policies_dir: Path = Field(default=REPO_ROOT / "data" / "policies")
 

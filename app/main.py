@@ -1,9 +1,10 @@
 """FastAPI application entrypoint."""
 
+import asyncio
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import structlog
 from fastapi import FastAPI, Request, Response
@@ -14,12 +15,45 @@ from starlette.responses import JSONResponse
 
 from app import __version__
 from app.api import health, mock_orders, tickets
+from app.core.budget import budget_status
 from app.core.config import get_settings
+from app.core.db import session_scope
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.rate_limit import limiter
 
 logger = get_logger(__name__)
+
+
+async def _budget_snapshot_loop(interval: float) -> None:
+    """Emit one `budget_snapshot` log line per interval.
+
+    With `LOG_FORMAT=json` these are structured records, so a CloudWatch Logs
+    metric filter on `$.daily_spend_usd` turns model spend into a graphable
+    metric that alarms can watch — without a boto3 dependency, an IAM policy
+    for PutMetricData, or a per-call metric charge.
+
+    Reads uncached: this is the one caller that wants a true current figure
+    rather than a cheap one, and it runs once a minute.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with session_scope() as db:
+                status = await budget_status(db, use_cache=False)
+            logger.info(
+                "budget_snapshot",
+                daily_spend_usd=float(status.spend_usd),
+                budget_usd=float(status.limit_usd),
+                budget_ratio=round(status.ratio, 4),
+                budget_enforced=status.enforced,
+                budget_exhausted=status.exhausted,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # A snapshot is diagnostics; losing one must not take down the app.
+            logger.warning("budget_snapshot_failed", error=str(exc))
 
 
 @asynccontextmanager
@@ -45,8 +79,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as exc:  # pragma: no cover - startup diagnostics
         logger.error("checkpointer_schema_failed", error=str(exc))
 
-    logger.info("app_startup", version=__version__, model=settings.agent_model)
+    snapshot: asyncio.Task | None = None
+    if settings.budget_snapshot_seconds > 0:
+        snapshot = asyncio.create_task(
+            _budget_snapshot_loop(settings.budget_snapshot_seconds)
+        )
+
+    logger.info(
+        "app_startup",
+        version=__version__,
+        model=settings.agent_model,
+        daily_budget_usd=settings.daily_budget_usd,
+        max_concurrent_runs=settings.max_concurrent_runs,
+    )
     yield
+
+    if snapshot is not None:
+        snapshot.cancel()
+        with suppress(asyncio.CancelledError):
+            await snapshot
     logger.info("app_shutdown")
 
 

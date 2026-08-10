@@ -25,6 +25,17 @@ def main() -> None:
         host="0.0.0.0",
         port=8000,
         log_level=settings.log_level.lower(),
+        # Makes `request.url.scheme` reflect the original https request rather
+        # than the plaintext hop from the proxy, so generated URLs and redirects
+        # are not downgraded. Trusting every peer is safe because nothing but
+        # the proxy can reach this port — the container publishes it only on the
+        # internal network.
+        #
+        # Note this does *not* decide the rate-limit bucket: that reads
+        # X-Forwarded-For explicitly, counting trusted hops from the right, so
+        # it cannot be steered by a forged header. See app.core.rate_limit.
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
     server = uvicorn.Server(config)
 

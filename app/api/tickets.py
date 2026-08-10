@@ -6,10 +6,12 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request, Respons
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.runner import resume_run, start_run
+from app.core.budget import assert_budget_available
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
-from app.core.rate_limit import limiter, ticket_rate_limit
+from app.core.rate_limit import expensive_rate_limit, limiter, ticket_rate_limit
+from app.core.security import require_demo_token
 from app.models.enums import TicketStatus
 from app.models.ticket import Ticket
 from app.schemas.ticket import (
@@ -55,6 +57,12 @@ async def create_ticket(
     `request` is required by slowapi's decorator, which reads the client
     address off it to key the limit.
     """
+    # Checked before the ticket is stored, so a refused submission leaves
+    # nothing behind. Only when the agent would actually run: storing a ticket
+    # for later costs nothing and stays available with the budget spent.
+    if payload.process:
+        await assert_budget_available(db)
+
     ticket = Ticket(
         channel=payload.channel,
         customer_email=str(payload.customer_email).lower(),
@@ -103,20 +111,24 @@ async def get_ticket(ticket_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -
 
 
 @router.post("/tickets/{ticket_id}/process", response_model=RunRead)
+@limiter.limit(expensive_rate_limit)
 async def process_ticket(
-    ticket_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+    request: Request, ticket_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 ) -> RunRead:
     """Run the agent synchronously and return the resulting run.
 
     The blocking counterpart to the background run started at creation —
     handy for scripted demos and tests that need the result in one call.
     """
+    await assert_budget_available(db)
     run = await start_run(db, ticket_id)
     return RunRead.model_validate(run)
 
 
 @router.post("/tickets/{ticket_id}/approve", response_model=RunRead)
+@limiter.limit(expensive_rate_limit)
 async def approve_ticket(
+    request: Request,
     ticket_id: uuid.UUID,
     payload: ApprovalRequest,
     db: AsyncSession = Depends(get_db),
@@ -125,6 +137,9 @@ async def approve_ticket(
 
     This is the only path that issues a refund or replacement.
     """
+    # Resuming the graph runs more nodes, so it spends. Rejection deliberately
+    # does not check: stopping a run must stay possible with the budget spent.
+    await assert_budget_available(db)
     run = await resume_run(
         db,
         ticket_id,
@@ -138,7 +153,9 @@ async def approve_ticket(
 
 
 @router.post("/tickets/{ticket_id}/reject", response_model=RunRead)
+@limiter.limit(expensive_rate_limit)
 async def reject_ticket(
+    request: Request,
     ticket_id: uuid.UUID,
     payload: RejectionRequest,
     db: AsyncSession = Depends(get_db),
@@ -178,8 +195,20 @@ async def get_stats(db: AsyncSession = Depends(get_db)) -> StatsResponse:
     return StatsResponse(**await ticket_service.compute_stats(db))
 
 
-@router.delete("/tickets/{ticket_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_ticket(ticket_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Response:
+@router.delete(
+    "/tickets/{ticket_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_demo_token)],
+)
+@limiter.limit(expensive_rate_limit)
+async def delete_ticket(
+    request: Request, ticket_id: uuid.UUID, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Delete a ticket and its runs.
+
+    Gated by `X-Demo-Token` when `DEMO_ADMIN_TOKEN` is set — the one route on a
+    public demo that can destroy what other visitors are looking at.
+    """
     ticket = await ticket_service.get_ticket(db, ticket_id)
     await db.delete(ticket)
     await db.commit()

@@ -1,5 +1,6 @@
 """Ticket queries and background processing."""
 
+import asyncio
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -8,6 +9,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.runner import start_run
+from app.core.config import get_settings
 from app.core.db import session_scope
 from app.core.errors import NotFoundError
 from app.core.logging import get_logger
@@ -16,6 +18,31 @@ from app.models.enums import RunStatus, TicketStatus
 from app.models.ticket import Ticket
 
 logger = get_logger(__name__)
+
+_run_slots: asyncio.Semaphore | None = None
+_run_slots_loop: asyncio.AbstractEventLoop | None = None
+
+
+def run_slots() -> asyncio.Semaphore:
+    """Bound on agent runs executing at once.
+
+    Ticket submission returns as soon as the row is stored and hands the run to
+    a background task, so without this N accepted requests become N concurrent
+    graph runs — each holding a database session, an ONNX embedding pass, and a
+    model call. On a small single-instance deployment that is how the box falls
+    over. Work above the bound waits its turn rather than being rejected.
+
+    Cached per event loop for the same reason as the compiled graph in
+    `agents.graph`: an asyncio primitive must not be shared across loops, and a
+    test suite creates a fresh loop per test.
+    """
+    global _run_slots, _run_slots_loop
+
+    loop = asyncio.get_running_loop()
+    if _run_slots is None or _run_slots_loop is not loop:
+        _run_slots = asyncio.Semaphore(get_settings().max_concurrent_runs)
+        _run_slots_loop = loop
+    return _run_slots
 
 
 async def get_ticket(db: AsyncSession, ticket_id: uuid.UUID) -> Ticket:
@@ -91,9 +118,12 @@ async def process_ticket_in_background(ticket_id: uuid.UUID) -> None:
     Opens its own session because the request's session is closed by the time
     a FastAPI background task runs. Never raises: a failure is recorded on the
     run and the ticket, and re-raising here would only crash a detached task.
+
+    Waits for a slot before opening the session, so queued work is not also
+    holding a connection from the pool while it waits.
     """
     try:
-        async with session_scope() as db:
+        async with run_slots(), session_scope() as db:
             await start_run(db, ticket_id)
     except Exception as exc:  # pragma: no cover - defensive
         logger.exception("background_processing_failed", ticket_id=str(ticket_id), error=str(exc))
