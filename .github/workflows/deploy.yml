@@ -1,0 +1,155 @@
+name: deploy
+
+# Builds both images, publishes them to ECR, and tells the instance to roll
+# forward. Authentication is GitHub OIDC against an IAM role scoped to this
+# repository and ref, so there is no AWS key stored anywhere, and the rollout
+# is an SSM command rather than SSH — no private key, no open port 22.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  NAME: support-agent
+
+permissions:
+  contents: read
+  id-token: write # required to request the OIDC token
+
+jobs:
+  # The same checks CI runs. Deploying past a red suite is how a broken demo
+  # goes live at the exact moment someone clicks the link.
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: support
+          POSTGRES_PASSWORD: support
+          POSTGRES_DB: support_agent
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U support -d support_agent"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    # Mirrors the `test` job in ci.yml. Duplicated rather than chained off a
+    # workflow_run so that a manual dispatch is gated too, not just a push.
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5433
+      POSTGRES_USER: support
+      POSTGRES_PASSWORD: support
+      POSTGRES_DB: support_agent
+      EMBEDDING_PROVIDER: hash
+      ESCALATION_RETRIEVAL_THRESHOLD: "0.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check app/ tests/ evals/ scripts/
+      - run: alembic upgrade head
+      - run: pytest -q
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ github.sha }}
+        run: |
+          # The repositories are IMMUTABLE, so a re-run against a commit that
+          # was already built would fail on push. Re-running a deploy is a
+          # normal thing to want (a bad config change, a failed rollout), so
+          # skip straight to the rollout when the images already exist.
+          exists() {
+            aws ecr describe-images --repository-name "$1" \
+              --image-ids "imageTag=$TAG" >/dev/null 2>&1
+          }
+          if exists "$NAME-api" && exists "$NAME-ui"; then
+            echo "images for $TAG already published; skipping build"
+            exit 0
+          fi
+
+          docker build -t "$REGISTRY/$NAME-api:$TAG" -f Dockerfile .
+          docker build -t "$REGISTRY/$NAME-ui:$TAG" -f Dockerfile.ui .
+          docker push "$REGISTRY/$NAME-api:$TAG"
+          docker push "$REGISTRY/$NAME-ui:$TAG"
+
+      # The durable record of what should be running. The instance reads it on
+      # every boot, so a reboot comes back on the deployed version rather than
+      # whatever it happened to have last.
+      - name: Record the image tag
+        run: |
+          aws ssm put-parameter --name "/$NAME/image_tag" --type String \
+            --overwrite --value "${{ github.sha }}"
+
+      - name: Roll the instance forward
+        id: rollout
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=$NAME" "Name=instance-state-name,Values=running" \
+            --query 'Reservations[0].Instances[0].InstanceId' --output text)
+          echo "Deploying to $INSTANCE_ID"
+
+          # bootstrap.sh re-syncs config from S3, rewrites .env from Parameter
+          # Store (picking up the tag recorded above), pulls, and restarts. The
+          # settings it needs were persisted at first boot.
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${{ github.sha }}" \
+            --timeout-seconds 900 \
+            --parameters 'commands=["set -euo pipefail","source /etc/support-agent.conf","aws s3 cp s3://$CONFIG_BUCKET/config/bootstrap.sh /opt/support-agent/bootstrap.sh","chmod +x /opt/support-agent/bootstrap.sh","/opt/support-agent/bootstrap.sh"]' \
+            --query 'Command.CommandId' --output text)
+
+          # send-command returns as soon as it is queued; wait for the result
+          # so a failed rollout fails the workflow rather than passing silently.
+          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" || true
+          STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" --query 'Status' --output text)
+          echo "rollout status: $STATUS"
+          aws ssm get-command-invocation --command-id "$CMD_ID" \
+            --instance-id "$INSTANCE_ID" --query 'StandardErrorContent' --output text
+          [ "$STATUS" = "Success" ]
+
+      # bootstrap.sh returning 0 only means the containers were asked to start.
+      # This is the check that the demo actually answers.
+      - name: Smoke test the public endpoint
+        run: |
+          # Read the domain from Parameter Store rather than a second GitHub
+          # variable, so there is one place it can be wrong.
+          DOMAIN=$(aws ssm get-parameter --name "/$NAME/site_address" \
+            --query 'Parameter.Value' --output text)
+          for attempt in $(seq 1 20); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+              "https://$DOMAIN/health/ready" || echo 000)
+            if [ "$CODE" = "200" ]; then
+              echo "healthy after $attempt attempt(s)"
+              exit 0
+            fi
+            echo "attempt $attempt: $CODE"
+            sleep 15
+          done
+          echo "endpoint did not become healthy"
+          exit 1

@@ -1,0 +1,39 @@
+# Edge for the deployed demo: TLS termination and the one route that must not
+# be reachable from a browser.
+#
+# `{$VAR}` is Caddy's own environment substitution, so this file is static and
+# needs no templating — the domain and ACME contact arrive as environment
+# variables from docker-compose.prod.yml.
+{
+	email {$ACME_EMAIL}
+}
+
+{$SITE_ADDRESS} {
+	# The mock order API issues refunds without passing the eligibility engine
+	# or the human-approval gate, so it is the one part of the surface that can
+	# make the demo lie about what it does. Blocked at the edge and again in
+	# nginx. The agent is unaffected: it calls the order API
+	# container-to-container over ORDER_API_BASE_URL, which never arrives here.
+	handle /mock-api/* {
+		respond "Not available on the public demo" 403
+	}
+
+	handle {
+		# nginx owns the security headers (see ui/security-headers.conf) so
+		# local compose and production serve identical ones; adding them again
+		# here would only duplicate them on every response.
+		reverse_proxy ui:80 {
+			# Agent runs are slow by nature — the synchronous /process route
+			# waits on the whole graph. Generous enough not to cut one off
+			# mid-flight; nginx behind this sets a matching 120s.
+			transport http {
+				read_timeout 180s
+			}
+		}
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

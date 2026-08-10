@@ -20,3 +20,14 @@ local_cache/
 
 .DS_Store
 *.log
+
+# Terraform. State is ignored because it holds the generated Postgres password;
+# it belongs in the encrypted S3 backend, not in git. .terraform.lock.hcl is
+# deliberately NOT ignored — commit it so everyone resolves the same provider
+# versions.
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+terraform/backend.hcl
+!terraform/*.tfvars.example
