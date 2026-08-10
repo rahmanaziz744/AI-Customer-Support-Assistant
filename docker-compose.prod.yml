@@ -1,0 +1,171 @@
+# Production stack for the single-instance deployment.
+#
+# Standalone rather than an overlay on docker-compose.yml: the local file
+# builds images from source and publishes ports to the host, neither of which
+# is wanted here, and a reader of this file should be able to see exactly what
+# runs in production without mentally applying a diff.
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Secrets and the image tag come from `.env` alongside this file, written at
+# boot from SSM Parameter Store. Everything non-secret is inline and therefore
+# version-controlled and reviewable.
+
+name: support-agent
+
+x-api-env: &api_env
+  # `:?` fails the command with a named error rather than starting the stack
+  # with an empty credential and failing later, further from the cause.
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set in .env from SSM}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env from SSM}
+  DEMO_ADMIN_TOKEN: ${DEMO_ADMIN_TOKEN:?set in .env from SSM}
+
+  AGENT_MODEL: claude-opus-5
+  AGENT_EFFORT: medium
+  # Cost lever, deliberately left off: the classifier node is the most-called
+  # and would run happily on claude-haiku-4-5. Validate before enabling —
+  # `python -m evals.runner --mode decisions` exits non-zero on a decision
+  # regression, which is exactly the check this needs.
+  CLASSIFIER_MODEL: ""
+
+  POSTGRES_USER: support
+  POSTGRES_DB: support_agent
+  POSTGRES_HOST: db
+  POSTGRES_PORT: 5432
+
+  # The agent reaches the order API container-to-container, so it never
+  # traverses Caddy or nginx and is unaffected by their /mock-api/* block.
+  ORDER_API_BASE_URL: http://api:8000
+
+  LOG_FORMAT: json
+  LOG_LEVEL: INFO
+  CORS_ORIGINS: https://${SITE_ADDRESS:?}
+
+  # Caddy appends the client address, nginx then appends Caddy's. Getting this
+  # wrong collapses every visitor into one rate-limit bucket.
+  TRUSTED_PROXY_HOPS: 2
+
+  RATE_LIMIT_TICKETS: 10/minute;60/hour;200/day
+  RATE_LIMIT_EXPENSIVE: 5/minute;30/hour;100/day
+  RATE_LIMIT_DEFAULT: 120/minute
+
+  DAILY_BUDGET_USD: ${DAILY_BUDGET_USD:-5.00}
+  BUDGET_WARN_RATIO: 0.6
+  BUDGET_SNAPSHOT_SECONDS: 60
+  MAX_CONCURRENT_RUNS: 2
+
+  FASTEMBED_CACHE_PATH: /opt/fastembed
+
+x-awslogs: &awslogs
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION:?}
+    awslogs-group: ${LOG_GROUP:?}
+    # The log group is created by Terraform with a retention policy, so the
+    # driver is not given permission to create one implicitly.
+    awslogs-create-group: "false"
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: support
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: support_agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # No `ports:` — Postgres is reachable only on the compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U support -d support_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging:
+      <<: *awslogs
+      options:
+        awslogs-region: ${AWS_REGION:?}
+        awslogs-group: ${LOG_GROUP:?}
+        awslogs-create-group: "false"
+        awslogs-stream: db
+
+  # Runs migrations and seeds, then exits. Both are idempotent, so this is safe
+  # on every boot and every deploy; the API waits for it to succeed.
+  migrate:
+    image: ${ECR_REGISTRY:?}/support-agent-api:${IMAGE_TAG:?}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment: *api_env
+    command: >
+      sh -c "alembic upgrade head && python scripts/seed_db.py"
+    restart: "no"
+    logging:
+      <<: *awslogs
+      options:
+        awslogs-region: ${AWS_REGION:?}
+        awslogs-group: ${LOG_GROUP:?}
+        awslogs-create-group: "false"
+        awslogs-stream: migrate
+
+  api:
+    image: ${ECR_REGISTRY:?}/support-agent-api:${IMAGE_TAG:?}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment: *api_env
+    restart: unless-stopped
+    logging:
+      <<: *awslogs
+      options:
+        awslogs-region: ${AWS_REGION:?}
+        awslogs-group: ${LOG_GROUP:?}
+        awslogs-create-group: "false"
+        awslogs-stream: api
+
+  ui:
+    image: ${ECR_REGISTRY:?}/support-agent-ui:${IMAGE_TAG:?}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      <<: *awslogs
+      options:
+        awslogs-region: ${AWS_REGION:?}
+        awslogs-group: ${LOG_GROUP:?}
+        awslogs-create-group: "false"
+        awslogs-stream: ui
+
+  # Terminates TLS with an automatically renewed Let's Encrypt certificate.
+  # caddy_data holds the certificate store and must persist: losing it forces a
+  # re-issue on every restart, which will hit Let's Encrypt's rate limits.
+  caddy:
+    image: caddy:2.8-alpine
+    depends_on:
+      - ui
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?}
+      ACME_EMAIL: ${ACME_EMAIL:?}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    logging:
+      <<: *awslogs
+      options:
+        awslogs-region: ${AWS_REGION:?}
+        awslogs-group: ${LOG_GROUP:?}
+        awslogs-create-group: "false"
+        awslogs-stream: caddy
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

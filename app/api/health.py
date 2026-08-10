@@ -8,17 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import __version__
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.rate_limit import limiter
 
 router = APIRouter(tags=["health"])
 
 
+# Exempt from the global default limit: these are polled continuously by the
+# container healthcheck and the external uptime check, and a probe that starts
+# failing because it tripped a rate limit would report the exact outage it is
+# supposed to be detecting.
 @router.get("/health")
+@limiter.exempt
 async def health() -> dict[str, str]:
     """Liveness: the process is up. Deliberately does not touch the database."""
     return {"status": "ok", "version": __version__}
 
 
 @router.get("/health/ready")
+@limiter.exempt
 async def readiness(db: AsyncSession = Depends(get_db)) -> JSONResponse:
     """Readiness: dependencies this process needs are actually reachable."""
     settings = get_settings()

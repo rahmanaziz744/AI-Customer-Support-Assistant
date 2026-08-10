@@ -59,6 +59,24 @@ class GuardrailError(AppError):
     code = "guardrail_blocked"
 
 
+class UnauthorizedError(AppError):
+    """The caller did not present the credential a protected route requires."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    code = "unauthorized"
+
+
+class BudgetExceededError(AppError):
+    """The rolling model-spend ceiling is used up; no new agent work starts.
+
+    429 rather than 503: the condition is caller-visible, temporary, and clears
+    on its own as spend ages out of the window — the same shape as a rate limit.
+    """
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "budget_exceeded"
+
+
 def _envelope(code: str, message: str, detail: Any = None) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "detail": detail}}
 

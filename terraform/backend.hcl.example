@@ -1,0 +1,12 @@
+# Copy to backend.hcl, then:
+#
+#   aws s3 mb s3://your-tf-state-bucket --region us-east-1
+#   terraform init -backend-config=backend.hcl
+#
+# The bucket must exist before init — Terraform cannot create the bucket that
+# holds its own state. State contains the generated Postgres password, so keep
+# the bucket private and versioned.
+
+bucket = "your-tf-state-bucket"
+key    = "support-agent/terraform.tfstate"
+region = "us-east-1"

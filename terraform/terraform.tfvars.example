@@ -1,0 +1,28 @@
+# Copy to terraform.tfvars and fill in. Secrets do NOT belong here — they are
+# set directly in SSM Parameter Store so they never enter Terraform state.
+
+# Required: Caddy gets a Let's Encrypt certificate for this, so it must be a
+# real hostname you control. Point its A record at the `public_ip` output.
+domain_name = "support-demo.example.com"
+
+# Let's Encrypt expiry notices.
+acme_email = "you@example.com"
+
+# Where alarms go. Confirm the SNS subscription email after the first apply.
+alert_email = "you@example.com"
+
+# owner/repo permitted to assume the deploy role via GitHub OIDC.
+github_repository = "rahmanaziz744/AI-Customer-Support-Assistant"
+
+# Set true to have Terraform create the hosted zone and A record. Leave false
+# if DNS lives at your registrar; then point the record at public_ip yourself.
+create_route53_zone = false
+
+# --- optional ---------------------------------------------------------------
+# region                 = "us-east-1"
+# instance_type          = "t3.small"
+# root_volume_gb         = 30
+# daily_budget_usd       = 5.0
+# budget_warn_ratio      = 0.6
+# monthly_aws_budget_usd = 35
+# log_retention_days     = 14
