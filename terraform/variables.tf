@@ -184,3 +184,27 @@ variable "github_deploy_ref" {
   type        = string
   default     = "refs/heads/main"
 }
+
+# GitHub can emit an immutable OIDC subject claim that pins these numeric IDs
+# alongside the owner and repository names, so a rename cannot satisfy a trust
+# policy written against the name. Supply them and the deploy role accepts that
+# form as well as the legacy one; leave them empty for legacy only.
+#
+#   curl -s https://api.github.com/repos/<owner>/<repo> \
+#     | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["owner"]["id"], d["id"])'
+#
+# If a deploy fails with "Not authorized to perform sts:AssumeRoleWithWebIdentity"
+# while the names plainly match, this is the usual reason. The claim that was
+# actually sent is in the CloudTrail event for the failed call.
+
+variable "github_owner_id" {
+  description = "Numeric GitHub account ID of the repository owner. Empty to accept only the legacy subject claim."
+  type        = string
+  default     = ""
+}
+
+variable "github_repository_id" {
+  description = "Numeric GitHub repository ID. Empty to accept only the legacy subject claim."
+  type        = string
+  default     = ""
+}
