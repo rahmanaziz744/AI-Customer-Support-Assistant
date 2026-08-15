@@ -48,9 +48,32 @@ variable "create_route53_zone" {
     Create a hosted zone for domain_name and manage its A record here. Set
     false when DNS lives elsewhere; you then point the record at the Elastic IP
     yourself. A hosted zone is about $0.50/month.
+
+    If the zone already exists — which is the case for any domain registered
+    through Route 53 — leave this false and set route53_zone_id instead.
   EOT
   type        = bool
   default     = false
+
+  validation {
+    condition     = !(var.create_route53_zone && var.route53_zone_id != "")
+    error_message = "Set create_route53_zone or route53_zone_id, not both: the first creates a zone, the second uses one that exists."
+  }
+}
+
+variable "route53_zone_id" {
+  description = <<-EOT
+    Existing hosted zone to hold the A record, e.g. Z09461992V2SUE1NCQIMF.
+    Registering a domain through Route 53 creates its zone for you, so this is
+    the setting that case wants; create_route53_zone would make a second zone
+    the registrar does not delegate to, and the record would never resolve.
+
+      aws route53 list-hosted-zones --query 'HostedZones[].[Name,Id]' --output text
+
+    Leave empty to manage DNS outside Terraform.
+  EOT
+  type        = string
+  default     = ""
 }
 
 # ---------------------------------------------------------------------------
