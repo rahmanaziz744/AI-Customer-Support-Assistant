@@ -30,11 +30,28 @@ class OrderAPIError(RuntimeError):
         self.detail = detail
 
 
+_default_transport: httpx.AsyncBaseTransport | None = None
+
+
+def set_default_transport(transport: httpx.AsyncBaseTransport | None) -> None:
+    """Override (or with None, restore) the transport every client uses.
+
+    The graph nodes construct `OrderClient()` with no arguments, so a per-call
+    `transport=` cannot reach them. This is the seam — the same shape as
+    `app.agents.llm.set_model_factory` — that lets the test suite bind the
+    client to the ASGI app instead of a socket, so the whole graph runs without
+    anything listening on a port.
+    """
+    global _default_transport
+    _default_transport = transport
+
+
 class OrderClient:
     """Thin async wrapper over the order endpoints.
 
     `transport` exists so tests can bind the client straight to the ASGI app
-    without binding a socket.
+    without binding a socket; `set_default_transport` does the same for the
+    clients that nodes construct themselves.
     """
 
     def __init__(
@@ -46,7 +63,7 @@ class OrderClient:
     ) -> None:
         settings = get_settings()
         self._base_url = (base_url or settings.order_api_base_url).rstrip("/")
-        self._transport = transport
+        self._transport = transport if transport is not None else _default_transport
         self._timeout = timeout or settings.order_api_timeout_seconds
 
     def _client(self) -> httpx.AsyncClient:

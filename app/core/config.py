@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     # -- Anthropic ---------------------------------------------------------
     anthropic_api_key: SecretStr = SecretStr("")
-    agent_model: str = "claude-opus-5"
+    agent_model: str = "claude-sonnet-5"
     agent_effort: str = "medium"
     classifier_model: str = ""
     judge_model: str = ""

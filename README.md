@@ -114,7 +114,7 @@ key are the CI default.
 | --- | --- |
 | API | FastAPI, Pydantic v2, SQLAlchemy 2 (async), Alembic |
 | Agent | LangGraph with a Postgres checkpointer, `langchain-anthropic` |
-| Model | `claude-opus-5` (per-node overrides supported) |
+| Model | `claude-sonnet-5` (per-node overrides supported) |
 | Storage | Postgres 16 + pgvector, HNSW cosine index |
 | Embeddings | `fastembed` / `BAAI/bge-small-en-v1.5` — local, no second API key |
 | UI | React 18 + TypeScript + Vite, no component framework |
