@@ -106,7 +106,15 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 data "aws_iam_policy_document" "github_assume" {
   statement {
-    actions = ["sts:AssumeRoleWithWebIdentity"]
+    # sts:TagSession is required, not optional: configure-aws-credentials
+    # passes seven session tags (repository, workflow, actor, branch, commit
+    # and so on) unless role-skip-session-tagging is set, and STS refuses the
+    # whole call without permission to apply them. The refusal is reported
+    # against AssumeRoleWithWebIdentity — "Not authorized to perform
+    # sts:AssumeRoleWithWebIdentity" — which points at the wrong action and
+    # reads exactly like a mismatched `sub` condition. The tags are worth
+    # keeping: they are what attributes a CloudTrail event to a workflow run.
+    actions = ["sts:AssumeRoleWithWebIdentity", "sts:TagSession"]
 
     principals {
       type        = "Federated"

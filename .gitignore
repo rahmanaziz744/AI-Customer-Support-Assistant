@@ -33,4 +33,4 @@ terraform/backend.hcl
 !terraform/*.tfvars.example
 # Saved plans embed the same generated secrets the state does, in cleartext.
 terraform/*.tfplan
-terraform/tfplan.out
+terraform/tfplan*
