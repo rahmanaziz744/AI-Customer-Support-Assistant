@@ -27,7 +27,7 @@ services:
         condition: service_healthy
     environment: &api_env
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      AGENT_MODEL: ${AGENT_MODEL:-claude-opus-5}
+      AGENT_MODEL: ${AGENT_MODEL:-claude-sonnet-5}
       AGENT_EFFORT: ${AGENT_EFFORT:-medium}
       POSTGRES_USER: ${POSTGRES_USER:-support}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-support}

@@ -20,12 +20,16 @@ x-api-env: &api_env
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env from SSM}
   DEMO_ADMIN_TOKEN: ${DEMO_ADMIN_TOKEN:?set in .env from SSM}
 
-  AGENT_MODEL: claude-opus-5
+  # Sonnet 5 ($3/$15 per MTok) rather than Opus 5 ($5/$25): this is a demo, and
+  # the eligibility engine — not the model — is what decides whether money
+  # moves, so the cheaper model costs correctness nothing.
+  AGENT_MODEL: claude-sonnet-5
   AGENT_EFFORT: medium
   # Cost lever, deliberately left off: the classifier node is the most-called
-  # and would run happily on claude-haiku-4-5. Validate before enabling —
+  # and would run happily on claude-haiku-4-5 ($1/$5). Validate before enabling —
   # `python -m evals.runner --mode decisions` exits non-zero on a decision
-  # regression, which is exactly the check this needs.
+  # regression, which is exactly the check this needs. `effort` is omitted
+  # automatically for Haiku, which rejects it (app/agents/llm.py).
   CLASSIFIER_MODEL: ""
 
   POSTGRES_USER: support

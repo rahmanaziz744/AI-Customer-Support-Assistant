@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+from app.agents.llm import supports_effort
 from app.agents.tools import clamp_to_eligibility, normalise_tool_calls
 from app.core.pricing import (
     TokenUsage,
@@ -14,6 +15,27 @@ from app.core.pricing import (
 )
 from app.rag.chunker import MAX_CHUNK_CHARS, chunk_markdown
 from app.rag.loader import PolicyParseError, parse_policy
+
+
+class TestEffortSupport:
+    """`output_config.effort` is a 400 on models that do not accept it."""
+
+    @pytest.mark.parametrize(
+        "model", ["claude-sonnet-5", "claude-opus-5", "claude-sonnet-4-6"]
+    )
+    def test_supported_models_get_effort(self, model):
+        assert supports_effort(model)
+
+    @pytest.mark.parametrize("model", ["claude-haiku-4-5", "claude-sonnet-4-5"])
+    def test_models_that_reject_effort_do_not_get_it(self, model):
+        assert not supports_effort(model)
+
+    def test_dated_snapshot_matches_its_base_model(self):
+        assert not supports_effort("claude-haiku-4-5-20251001")
+
+    def test_unknown_model_fails_closed(self):
+        # Better to lose the effort hint than to 400 every request.
+        assert not supports_effort("claude-something-unreleased")
 
 
 class TestPricing:

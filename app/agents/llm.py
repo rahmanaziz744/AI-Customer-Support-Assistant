@@ -19,6 +19,27 @@ ModelFactory = Callable[[str, dict[str, Any]], BaseChatModel]
 
 _factory: ModelFactory | None = None
 
+# Models that accept `output_config.effort`. Haiku 4.5 and the 4.5-generation
+# Sonnet reject the parameter with a 400, so an allowlist is the safe shape:
+# an unrecognised model simply runs without an effort hint instead of failing
+# every request. Add new model families here as they are adopted.
+_EFFORT_MODELS = (
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
+)
+
+
+def supports_effort(model: str) -> bool:
+    """Whether `model` accepts `output_config.effort`."""
+    return model.startswith(_EFFORT_MODELS)
+
 
 def _default_factory(node: str, options: dict[str, Any]) -> BaseChatModel:
     from langchain_anthropic import ChatAnthropic
@@ -35,10 +56,12 @@ def _default_factory(node: str, options: dict[str, Any]) -> BaseChatModel:
     }
 
     # `effort` controls reasoning depth and token spend. It is nested under
-    # output_config, and Claude Opus 5 rejects temperature/top_p entirely, so
-    # this is the only sampling-style dial we set.
+    # output_config, and the Sonnet 5 / Opus 5 generation rejects
+    # temperature/top_p entirely, so this is the only sampling-style dial we
+    # set. Cheaper models such as Haiku 4.5 reject `effort` in turn — see
+    # `supports_effort` — so it is omitted rather than sent blindly.
     effort = options.get("effort", settings.agent_effort)
-    if effort:
+    if effort and supports_effort(model):
         kwargs["model_kwargs"] = {"output_config": {"effort": effort}}
 
     return ChatAnthropic(**kwargs)

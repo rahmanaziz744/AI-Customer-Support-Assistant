@@ -107,6 +107,12 @@ tests install a scripted fake via `set_model_factory` (`tests/fakes.py`), so the
 whole graph — routing, guardrails, tool handling, the interrupt — runs
 deterministically with no API key. The autouse `_restore_models` fixture undoes it.
 
+`app/services/order_client.py::set_default_transport` is the matching seam for
+the order API. Nodes construct `OrderClient()` with no arguments, so the `client`
+fixture points the default transport at the ASGI app; without it the graph would
+need a real socket on `ORDER_API_BASE_URL`, and the API tests fail against a
+stopped server. The fixture restores it to `None` on teardown.
+
 DB-backed tests skip cleanly when Postgres is down (`db_available` probes with a
 2s timeout), which keeps plain `pytest` fast on a laptop with nothing started.
 
@@ -123,7 +129,10 @@ ticket. That gate is tested directly in `test_guardrails.py`.
   graph state — state is JSON-checkpointed and `Decimal` is not JSON-native.
 - `Settings` (`app/core/config.py`) is `lru_cache`d; new config goes there with a
   default that keeps local dev working, plus a documented entry in `.env.example`.
-- Claude Opus 5 rejects `temperature`/`top_p`. Reasoning depth is set via
-  `output_config.effort` — see `_default_factory` in `llm.py`.
+- The Sonnet 5 / Opus 5 generation rejects `temperature`/`top_p`. Reasoning
+  depth is set via `output_config.effort` instead — see `_default_factory` in
+  `llm.py`. `effort` is itself rejected by cheaper models (Haiku 4.5), so
+  `supports_effort` allowlists the families that accept it and omits the
+  parameter otherwise. Adding a new model family means adding it there.
 - Cost tracking prices from a table in `app/core/pricing.py`; unknown models record
   `null`, not `$0`. Add new model IDs there.

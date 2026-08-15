@@ -144,10 +144,19 @@ async def client(db_available: bool) -> AsyncGenerator[httpx.AsyncClient, None]:
         pytest.skip("Postgres is not running (docker compose up -d db)")
 
     from app.main import app
+    from app.services import order_client
 
     transport = httpx.ASGITransport(app=app)
-    async with (
-        httpx.AsyncClient(transport=transport, base_url="http://test") as c,
-        app.router.lifespan_context(app),
-    ):
-        yield c
+    # The agent reaches the order API over HTTP even though it is mounted in
+    # this same app, so a graph run would otherwise need a real listening
+    # socket on ORDER_API_BASE_URL. Pointing the default transport at the same
+    # ASGI app keeps the suite socket-free.
+    order_client.set_default_transport(transport)
+    try:
+        async with (
+            httpx.AsyncClient(transport=transport, base_url="http://test") as c,
+            app.router.lifespan_context(app),
+        ):
+            yield c
+    finally:
+        order_client.set_default_transport(None)
