@@ -48,9 +48,32 @@ variable "create_route53_zone" {
     Create a hosted zone for domain_name and manage its A record here. Set
     false when DNS lives elsewhere; you then point the record at the Elastic IP
     yourself. A hosted zone is about $0.50/month.
+
+    If the zone already exists — which is the case for any domain registered
+    through Route 53 — leave this false and set route53_zone_id instead.
   EOT
   type        = bool
   default     = false
+
+  validation {
+    condition     = !(var.create_route53_zone && var.route53_zone_id != "")
+    error_message = "Set create_route53_zone or route53_zone_id, not both: the first creates a zone, the second uses one that exists."
+  }
+}
+
+variable "route53_zone_id" {
+  description = <<-EOT
+    Existing hosted zone to hold the A record, e.g. Z09461992V2SUE1NCQIMF.
+    Registering a domain through Route 53 creates its zone for you, so this is
+    the setting that case wants; create_route53_zone would make a second zone
+    the registrar does not delegate to, and the record would never resolve.
+
+      aws route53 list-hosted-zones --query 'HostedZones[].[Name,Id]' --output text
+
+    Leave empty to manage DNS outside Terraform.
+  EOT
+  type        = string
+  default     = ""
 }
 
 # ---------------------------------------------------------------------------
@@ -125,6 +148,26 @@ variable "log_retention_days" {
   description = "CloudWatch Logs retention."
   type        = number
   default     = 14
+}
+
+variable "enable_observability" {
+  description = <<-EOT
+    Create the alarms, the log metric filters they read, the external health
+    check, and the EBS snapshot schedule.
+
+    On by default because that is the right posture for anything real. Turning
+    it off is a deliberate cost trade for a demo deployment: it saves roughly
+    $4/month — nine alarms at $0.10, five custom metrics at $0.30, and a
+    Route53 health check at $0.50 — and none of it is visible to someone using
+    the site. What survives is the log group (the container log driver writes
+    to it regardless), the SNS topic, and the AWS budget, which are free and
+    are what actually stop a surprise bill.
+
+    The nightly pg_dump to S3 in bootstrap.sh is independent of this, so
+    turning it off still leaves a logical backup of the database.
+  EOT
+  type        = bool
+  default     = true
 }
 
 # ---------------------------------------------------------------------------

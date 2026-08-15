@@ -42,8 +42,7 @@ output "next_steps" {
          aws ssm put-parameter --name /${var.name}/demo_admin_token \
            --type SecureString --overwrite --value "$(openssl rand -hex 16)"
 
-    2. Point ${var.domain_name} at ${aws_eip.app.public_ip} and wait for it to
-       resolve. Caddy cannot get a certificate before that.
+    2. ${local.dns_next_step}
 
     3. Confirm the SNS subscription emailed to ${var.alert_email}. Until you
        do, no alarm reaches you.
