@@ -18,6 +18,10 @@ resource "aws_sns_topic_subscription" "email" {
 locals {
   alarm_actions = [aws_sns_topic.alerts.arn]
   namespace     = "SupportAgent"
+
+  # Everything metered is gated on this; the log group, the SNS topic and the
+  # budget above are free and stay. See var.enable_observability.
+  obs = var.enable_observability ? 1 : 0
 }
 
 # ---------------------------------------------------------------------------
@@ -28,6 +32,8 @@ locals {
 # PutMetricData, or a per-call metric charge.
 
 resource "aws_cloudwatch_log_metric_filter" "daily_spend" {
+  count = local.obs
+
   name           = "${var.name}-daily-spend"
   log_group_name = aws_cloudwatch_log_group.app.name
   pattern        = "{ $.event = \"budget_snapshot\" }"
@@ -41,6 +47,8 @@ resource "aws_cloudwatch_log_metric_filter" "daily_spend" {
 }
 
 resource "aws_cloudwatch_log_metric_filter" "errors" {
+  count = local.obs
+
   name           = "${var.name}-errors"
   log_group_name = aws_cloudwatch_log_group.app.name
   pattern        = "{ $.level = \"error\" }"
@@ -54,6 +62,8 @@ resource "aws_cloudwatch_log_metric_filter" "errors" {
 }
 
 resource "aws_cloudwatch_log_metric_filter" "run_failures" {
+  count = local.obs
+
   name           = "${var.name}-run-failures"
   log_group_name = aws_cloudwatch_log_group.app.name
   pattern        = "{ $.event = \"background_processing_failed\" }"
@@ -71,6 +81,8 @@ resource "aws_cloudwatch_log_metric_filter" "run_failures" {
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "spend_warning" {
+  count = local.obs
+
   alarm_name        = "${var.name}-spend-warning"
   alarm_description = "Model spend passed ${var.budget_warn_ratio * 100}% of the daily ceiling. Nothing is refused yet."
 
@@ -90,6 +102,8 @@ resource "aws_cloudwatch_metric_alarm" "spend_warning" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "spend_exhausted" {
+  count = local.obs
+
   alarm_name        = "${var.name}-spend-exhausted"
   alarm_description = "Daily model budget is spent; the app is refusing new agent runs with 429."
 
@@ -141,6 +155,8 @@ resource "aws_budgets_budget" "monthly" {
 # a ~$25/month deployment.
 
 resource "aws_route53_health_check" "public" {
+  count = local.obs
+
   fqdn              = var.domain_name
   type              = "HTTPS"
   resource_path     = "/health/ready"
@@ -152,12 +168,14 @@ resource "aws_route53_health_check" "public" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "uptime" {
+  count = local.obs
+
   alarm_name        = "${var.name}-unreachable"
   alarm_description = "The public endpoint failed its health check."
 
   namespace           = "AWS/Route53"
   metric_name         = "HealthCheckStatus"
-  dimensions          = { HealthCheckId = aws_route53_health_check.public.id }
+  dimensions          = { HealthCheckId = aws_route53_health_check.public[0].id }
   statistic           = "Minimum"
   period              = 60
   evaluation_periods  = 3
@@ -170,6 +188,8 @@ resource "aws_cloudwatch_metric_alarm" "uptime" {
 }
 
 resource "aws_cloudwatch_metric_alarm" "instance_status" {
+  count = local.obs
+
   alarm_name        = "${var.name}-status-check-failed"
   alarm_description = "EC2 instance or host status check failed."
 
@@ -191,6 +211,8 @@ resource "aws_cloudwatch_metric_alarm" "instance_status" {
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "cpu" {
+  count = local.obs
+
   alarm_name        = "${var.name}-cpu-high"
   alarm_description = "Sustained high CPU; agent runs are queueing behind each other."
 
@@ -209,6 +231,8 @@ resource "aws_cloudwatch_metric_alarm" "cpu" {
 
 # The figure most likely to explain an outage on a 2 GB instance.
 resource "aws_cloudwatch_metric_alarm" "memory" {
+  count = local.obs
+
   alarm_name        = "${var.name}-memory-high"
   alarm_description = "Memory pressure. Postgres, the ONNX runtime, and the agent share 2 GB."
 
@@ -228,6 +252,8 @@ resource "aws_cloudwatch_metric_alarm" "memory" {
 # The Postgres volume, the docker image cache, and Caddy's certificate store
 # all share one volume.
 resource "aws_cloudwatch_metric_alarm" "disk" {
+  count = local.obs
+
   alarm_name        = "${var.name}-disk-high"
   alarm_description = "Root volume filling up."
 
@@ -249,6 +275,8 @@ resource "aws_cloudwatch_metric_alarm" "disk" {
 # ---------------------------------------------------------------------------
 
 resource "aws_cloudwatch_metric_alarm" "errors" {
+  count = local.obs
+
   alarm_name        = "${var.name}-error-rate"
   alarm_description = "Elevated application error rate."
 
@@ -267,6 +295,8 @@ resource "aws_cloudwatch_metric_alarm" "errors" {
 # A failed background run leaves its ticket in FAILED and is not retried, so
 # these need a human.
 resource "aws_cloudwatch_metric_alarm" "run_failures" {
+  count = local.obs
+
   alarm_name        = "${var.name}-agent-run-failures"
   alarm_description = "Agent runs are failing; affected tickets stay FAILED until re-driven."
 

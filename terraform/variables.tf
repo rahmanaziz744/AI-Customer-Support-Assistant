@@ -150,6 +150,26 @@ variable "log_retention_days" {
   default     = 14
 }
 
+variable "enable_observability" {
+  description = <<-EOT
+    Create the alarms, the log metric filters they read, the external health
+    check, and the EBS snapshot schedule.
+
+    On by default because that is the right posture for anything real. Turning
+    it off is a deliberate cost trade for a demo deployment: it saves roughly
+    $4/month — nine alarms at $0.10, five custom metrics at $0.30, and a
+    Route53 health check at $0.50 — and none of it is visible to someone using
+    the site. What survives is the log group (the container log driver writes
+    to it regardless), the SNS topic, and the AWS budget, which are free and
+    are what actually stop a surprise bill.
+
+    The nightly pg_dump to S3 in bootstrap.sh is independent of this, so
+    turning it off still leaves a logical backup of the database.
+  EOT
+  type        = bool
+  default     = true
+}
+
 # ---------------------------------------------------------------------------
 # CI/CD
 # ---------------------------------------------------------------------------

@@ -130,7 +130,8 @@ resource "aws_instance" "app" {
 # Snapshots
 # ---------------------------------------------------------------------------
 # Covers losing the volume or the instance. The nightly pg_dump in bootstrap.sh
-# covers losing the data inside it.
+# covers losing the data inside it, and is not gated on enable_observability —
+# so turning snapshots off still leaves a logical backup.
 
 data "aws_iam_policy_document" "dlm_assume" {
   statement {
@@ -143,18 +144,24 @@ data "aws_iam_policy_document" "dlm_assume" {
 }
 
 resource "aws_iam_role" "dlm" {
+  count = local.obs
+
   name               = "${var.name}-dlm"
   assume_role_policy = data.aws_iam_policy_document.dlm_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "dlm" {
-  role       = aws_iam_role.dlm.name
+  count = local.obs
+
+  role       = aws_iam_role.dlm[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
 }
 
 resource "aws_dlm_lifecycle_policy" "daily" {
+  count = local.obs
+
   description        = "${var.name} daily snapshots"
-  execution_role_arn = aws_iam_role.dlm.arn
+  execution_role_arn = aws_iam_role.dlm[0].arn
   state              = "ENABLED"
 
   policy_details {
