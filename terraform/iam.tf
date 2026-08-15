@@ -104,6 +104,21 @@ resource "aws_iam_openid_connect_provider" "github" {
   ]
 }
 
+locals {
+  github_owner = split("/", var.github_repository)[0]
+  github_repo  = split("/", var.github_repository)[1]
+
+  # The immutable form is only expressible once the numeric IDs are known, so
+  # it is added when they are supplied and omitted when they are not. See the
+  # `sub` condition below for why both forms are accepted.
+  github_subs = compact([
+    "repo:${var.github_repository}:ref:${var.github_deploy_ref}",
+    var.github_owner_id != "" && var.github_repository_id != ""
+    ? "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repository_id}:ref:${var.github_deploy_ref}"
+    : "",
+  ])
+}
+
 data "aws_iam_policy_document" "github_assume" {
   statement {
     # sts:TagSession is required, not optional: configure-aws-credentials
@@ -129,10 +144,26 @@ data "aws_iam_policy_document" "github_assume" {
 
     # Scoped to one repository and one ref. Without the `sub` condition any
     # GitHub Actions workflow anywhere could assume this role.
+    #
+    # Two accepted forms, because GitHub emits one or the other depending on a
+    # repository setting. The immutable form interpolates the numeric owner and
+    # repository IDs into the names —
+    #
+    #   repo:owner@1234/repo@5678:ref:refs/heads/main
+    #
+    # so that renaming the repository, or someone else later claiming the name
+    # you gave up, cannot satisfy a policy written against the name alone. A
+    # repository with that setting on sends *only* the immutable form, and a
+    # policy matching the legacy string fails with "Not authorized to perform
+    # sts:AssumeRoleWithWebIdentity" — an error that names the action rather
+    # than the claim, and so reads like a permissions problem.
+    #
+    # Listing both keeps the role working whichever form arrives. It widens
+    # nothing: each value pins the same single repository and ref.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:ref:${var.github_deploy_ref}"]
+      values   = local.github_subs
     }
   }
 }
